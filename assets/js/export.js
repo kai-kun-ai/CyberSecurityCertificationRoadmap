@@ -87,6 +87,32 @@ function generationLine(v) {
   ].filter(Boolean).join("  ·  ");
 }
 
+const COLOR_PROPS = ["background-color", "color", "border-top-color", "border-right-color",
+                     "border-bottom-color", "border-left-color", "outline-color", "text-decoration-color"];
+const MODERN_COLOR = /color-mix\(|color\(|lab\(|lch\(|oklab\(|oklch\(/i;
+
+/** Returns [[el, originalStyleAttr|null], …] for every element touched. */
+function pinModernColors(root) {
+  const out = [];
+  const els = [root, ...root.querySelectorAll("*")];
+  for (const el of els) {
+    if (el.namespaceURI !== "http://www.w3.org/1999/xhtml") continue;
+    const cs = getComputedStyle(el);
+    let touched = false;
+    let original = null;
+    const touch = () => { if (!touched) { touched = true; original = el.getAttribute("style"); } };
+    for (const prop of COLOR_PROPS) {
+      const v = cs.getPropertyValue(prop);
+      if (MODERN_COLOR.test(v)) { touch(); el.style.setProperty(prop, resolveCssColor(v), "important"); }
+    }
+    for (const prop of ["box-shadow", "text-shadow", "background-image"]) {
+      if (MODERN_COLOR.test(cs.getPropertyValue(prop))) { touch(); el.style.setProperty(prop, "none", "important"); }
+    }
+    if (touched) out.push([el, original]);
+  }
+  return out;
+}
+
 /* ---------------- Matrix capture (with arrows) ----------------
  *
  * Exports use a FIXED virtual canvas size (FHD) regardless of the
@@ -125,6 +151,13 @@ async function captureMatrixWithArrows(redrawArrows) {
   const restored = filteredEls.map(el => [el, el.getAttribute("filter")]);
   for (const el of filteredEls) el.removeAttribute("filter");
 
+  // html2canvas v1.4 cannot parse the color(srgb …) values Chrome reports
+  // for color-mix() (tier-tinted cells, focused headers, match glows…).
+  // Pin every such colour as a flat rgba() inline on the live element for
+  // the duration of the capture — the clone copies inline styles — and
+  // restore the original style attributes afterwards.
+  const pinned = pinModernColors(wrap);
+
   let canvas;
   try {
     canvas = await window.html2canvas(wrap, {
@@ -140,15 +173,9 @@ async function captureMatrixWithArrows(redrawArrows) {
         // functions used in our cell tier-tinted backgrounds. Pre-resolve
         // each tier's background to a flat rgba() via canvas pixel readback
         // and pin it as inline style on every clone cell.
-        const tierBg = {};
-        for (const tier of ["introductory","foundational","associate","professional","expert","specialty"]) {
-          const live = document.querySelector(`.cell[data-tier="${tier}"]`);
-          if (live) tierBg[tier] = resolveCssColor(getComputedStyle(live).backgroundColor);
-        }
-        for (const el of doc.querySelectorAll(".cell[data-tier]")) {
-          const bg = tierBg[el.dataset.tier];
-          if (bg) el.style.backgroundColor = bg;
-        }
+        // Drop chrome that is display:none anyway — html2canvas still parses
+        // hidden subtrees and would choke on their color-mix() values.
+        for (const el of doc.querySelectorAll(".overview, .selected-overlay, .cert-tooltip")) el.remove();
 
         // Flatten sticky positioning so headers land at the top of the
         // capture rather than at the user's current scroll offset.
@@ -156,7 +183,7 @@ async function captureMatrixWithArrows(redrawArrows) {
           el.style.position = "static";
         }
         // Hide chrome that shouldn't appear in the export.
-        for (const el of doc.querySelectorAll(".topbar, .controls, .about, .detail-panel, .vendor-panel, .show-details-cta")) {
+        for (const el of doc.querySelectorAll(".topbar, .controls, .about, .detail-panel, .side-panel, .side-backdrop, .list-view, .search-results, .legend-popover, .cert-tooltip, .show-details-cta, .show-overview-cta")) {
           el.style.display = "none";
         }
         // Mirror the SVG's style.width/height onto the actual SVG attributes.
@@ -171,6 +198,9 @@ async function captureMatrixWithArrows(redrawArrows) {
     });
   } finally {
     for (const [el, val] of restored) el.setAttribute("filter", val);
+    for (const [el, css] of pinned) {
+      if (css === null) el.removeAttribute("style"); else el.setAttribute("style", css);
+    }
     matrixWrap.style.cssText = origMatrix;
     document.body.style.cssText = origBody;
     document.body.classList.remove("exporting-png");

@@ -1,15 +1,21 @@
 import { loadAll } from "./loader.js";
-import { renderGrid, vendorIndex } from "./render.js";
-import { applyFilters, attachFilterListeners, buildVendorPanel } from "./filter.js";
+import { renderGrid, vendorIndex, cellCounts, visibleAxes } from "./render.js";
+import { applyFilters, attachFilterListeners, syncUiFromUrl } from "./filter.js";
 import { initThemeToggle } from "./theme.js";
 import { renderDetailPanel } from "./detail_panel.js";
 import { drawArrows, buildInverseMap } from "./arrows.js";
-import { getState, setState, subscribe } from "./url_state.js";
+import { getState, setState, subscribe, clearFilters } from "./url_state.js";
 import { exportMatrixPNG } from "./export.js";
 import { loadVersion, versionLabel } from "./version.js";
 import { attachContextMenu } from "./context_menu.js";
-import { matchCertIds } from "./search.js";
+import { buildSearchIndex, matchCertIds } from "./search.js";
+import { attachSearchPalette } from "./search_palette.js";
 import { updateSelectedOverlay } from "./selected_overlay.js";
+import { renderOverview } from "./overview.js";
+import { buildFilterPanel, syncFilterPanel, renderActiveFilters } from "./filter_panel.js";
+import { renderListView } from "./list_view.js";
+import { attachCardTooltip } from "./tooltip.js";
+import { activeFacetCount } from "./facets.js";
 import { t } from "./i18n.js";
 
 const state = {
@@ -17,84 +23,104 @@ const state = {
   tiers: [],
   certs: [],
   byId: new Map(),
+  domainsById: new Map(),
+  tiersById: new Map(),
   inverseMap: new Map(),
-  // Map<vendor-slug, count> over the full cert set. Used by the
-  // vendor-prominent highlight (threshold is in ui.vendorThreshold).
+  vendors: [],
   vendorCounts: new Map(),
+  searchIndex: new Map(),
   ui: {
     showJp: false,
     labelLang: "en",
     vendors: null,
+    domains: null,
+    tiers: null,
+    examJa: false,
+    expBands: null,
+    costBands: null,
     selectedId: null,
     // Default: panel is HIDDEN. Clicking a cert only updates highlight +
     // arrows; the panel is opt-in via the "Show details" button so the
     // arrow state is preserved while the user navigates between certs.
     panelDismissed: true,
-    // Live header search query (URL ?q=). Empty string = no search active.
     searchQuery: "",
-    // Vendor-highlight threshold (URL ?vt=). null/0 = highlight off.
+    searchFilter: false,
+    searchMatches: null,   // Set<id> | null, recomputed in rerender()
+    view: "matrix",
+    sort: null,
+    zoom: "m",
     vendorThreshold: null,
-    // Pass-through to render.js so it can apply .vendor-prominent without
-    // recomputing counts on every render.
     vendorCounts: new Map(),
   }
 };
 
 const grid = document.getElementById("grid");
 const wrap = document.getElementById("matrix-wrap");
+const listView = document.getElementById("list-view");
 const counter = document.getElementById("cert-count");
 const detail = document.getElementById("detail-panel");
 const arrowsSvg = document.getElementById("arrows-overlay");
 const selectedOverlay = document.getElementById("selected-overlay");
-const vendorPanel = document.getElementById("vendor-panel");
+const sidePanel = document.getElementById("side-panel");
+const sideOverview = document.getElementById("side-overview");
+const facetPanel = document.getElementById("facet-panel");
+const activeFilters = document.getElementById("active-filters");
+const filtersToggle = document.getElementById("filters-toggle");
+const filtersBadge = document.getElementById("filters-badge");
 const topbar = document.querySelector(".topbar");
 const topbarNav = document.getElementById("topbar-nav");
 const mobileToolsToggle = document.getElementById("mobile-tools-toggle");
 const mobileToolsMql = window.matchMedia("(max-width: 640px)");
+const dockedSideMql  = window.matchMedia("(min-width: 1600px)");
 
 const OVERVIEW_REL_CLASSES = ["rel-prereq", "rel-next", "rel-d2", "rel-d3", "rel-both"];
+const SIDE_PREF_KEY = "csr.side-open";
+
+let searchPalette = null;
+
+function lang() { return state.ui.labelLang === "ja" ? "ja" : "en"; }
 
 function rerender() {
-  // Skip while data is still loading. The priming syncFromUrl() call runs
-  // before bootstrap finishes; without this guard, it would wipe the
-  // "Loading roadmap…" message and leave an empty grid until the fetch
-  // resolves.
+  // Skip while data is still loading.
   if (state.byId.size === 0) return;
 
+  state.ui.searchMatches = matchCertIds(state.certs, state.searchIndex, state.ui.searchQuery);
   const visible = applyFilters(state.certs, state.ui);
-  renderGrid(grid, state.domains, state.tiers, visible, state.ui);
-  attachOverviewListeners();
-  counter.textContent = `${visible.length} of ${state.certs.length} certs`;
+  const isList = state.ui.view === "list";
 
-  // Apply live search highlight. The matched set is computed against
-  // the FULL cert list so a search match still surfaces certs that
-  // happen to be JP-filtered or vendor-filtered out (the user can then
-  // adjust those filters to see them).
+  document.body.classList.toggle("view-list", isList);
+  listView.hidden = !isList;
+
+  if (isList) {
+    renderListView(listView, {
+      certs: visible, domains: state.domains, tiers: state.tiers,
+      ui: state.ui, lang: lang(), query: state.ui.searchQuery,
+    });
+  } else {
+    renderGrid(grid, state.domains, state.tiers, visible, state.ui);
+  }
+  updateCounter(visible);
   applySearchHighlight();
+  renderSideOverview(visible);
+  syncFilterChrome();
 
   const isSelected = !!state.ui.selectedId && state.byId.has(state.ui.selectedId);
   const showPanel  = isSelected && !state.ui.panelDismissed;
 
-  // .has-selection: cert chosen → dim unrelated cards, show arrows.
-  // .detail-open : panel is visible → matrix-wrap shrinks to leave room.
   const wasPanelOpen = document.body.classList.contains("detail-open");
   document.body.classList.toggle("has-selection", isSelected);
   document.body.classList.toggle("detail-open",   showPanel);
-  // .panel-dismissed shows the floating "Show details" CTA.
   document.body.classList.toggle("panel-dismissed", isSelected && state.ui.panelDismissed);
 
-  // Always render the cert content into the panel when something is selected,
-  // even if currently dismissed (CSS .open class controls visibility).
   const selected = isSelected ? state.byId.get(state.ui.selectedId) : null;
   renderDetailPanel(detail, selected, state.byId, state.ui);
-  // Visibility is now CSS-driven (.open class), independent of content.
   detail.classList.toggle("open", showPanel);
   detail.setAttribute("aria-hidden", String(!showPanel));
 
   let didScrollSelection = false;
   const paintSelectionState = () => {
     redrawCurrentArrows();
-    updateSelectedOverlay(selectedOverlay, grid, state.ui.selectedId, state.byId);
+    updateSelectedOverlay(selectedOverlay, grid, isList ? null : state.ui.selectedId, state.byId);
     updateOverviewCtaVisibility();
     requestAnimationFrame(updateOverviewCtaVisibility);
     if (state.ui.selectedId && !didScrollSelection) {
@@ -106,13 +132,50 @@ function rerender() {
   setTimeout(paintSelectionState, 140);
 }
 
-function updateOverviewRelations() {
-  const overviewCells = grid.querySelectorAll(".overview-cell");
-  if (!overviewCells.length) return;
-
-  for (const cell of overviewCells) {
-    cell.classList.remove(...OVERVIEW_REL_CLASSES);
+function updateCounter(visible) {
+  const l = lang();
+  const total = state.certs.length;
+  const matches = state.ui.searchMatches;
+  if (matches) {
+    const visibleHits = visible.filter(c => matches.has(c.id)).length;
+    counter.textContent = l === "ja"
+      ? `${visibleHits} ${t("hits", l)} · 表示 ${visible.length} / ${total} 件`
+      : `${visibleHits} ${t("hits", l)} · ${visible.length} of ${total} certs shown`;
+  } else {
+    counter.textContent = l === "ja"
+      ? `${visible.length} / ${total} 件`
+      : `${visible.length} of ${total} certs`;
   }
+}
+
+function renderSideOverview(visible) {
+  if (!sideOverview) return;
+  const { domains, tiers } = visibleAxes(state.domains, state.tiers, state.ui);
+  const { counts, matched, selectedKey } = cellCounts(domains, tiers, visible, state.ui.searchMatches, state.ui.selectedId);
+  renderOverview(sideOverview, { domains, tiers, counts, matched, selectedKey, lang: lang(), variant: "side" });
+}
+
+function syncFilterChrome() {
+  const l = lang();
+  syncFilterPanel(facetPanel, {
+    certs: state.certs, ui: state.ui, domains: state.domains, tiers: state.tiers,
+    vendors: state.vendors, lang: l,
+  });
+  renderActiveFilters(activeFilters, {
+    ui: state.ui, domains: state.domains, tiers: state.tiers, vendors: state.vendors, lang: l,
+  });
+  const n = activeFacetCount(state.ui);
+  if (filtersBadge) {
+    filtersBadge.textContent = String(n);
+    filtersBadge.hidden = n === 0;
+  }
+  document.body.classList.toggle("has-filters", n > 0);
+}
+
+function updateOverviewRelations() {
+  const overviewCells = document.querySelectorAll(".overview-cell");
+  if (!overviewCells.length) return;
+  for (const cell of overviewCells) cell.classList.remove(...OVERVIEW_REL_CLASSES);
 
   const relByCell = new Map();
   for (const card of grid.querySelectorAll(".cert-card.rel-prereq, .cert-card.rel-next")) {
@@ -129,17 +192,21 @@ function updateOverviewRelations() {
 
   for (const [key, rel] of relByCell) {
     const [tier, domain] = key.split("|");
-    const overviewCell = grid.querySelector(
+    const cells = document.querySelectorAll(
       `.overview-cell[data-overview-tier="${CSS.escape(tier)}"][data-overview-domain="${CSS.escape(domain)}"]`
     );
-    if (!overviewCell || overviewCell.classList.contains("empty")) continue;
-    if (rel.prereq) overviewCell.classList.add("rel-prereq");
-    if (rel.next) overviewCell.classList.add("rel-next");
-    if (rel.prereq && rel.next) overviewCell.classList.add("rel-both");
-    if (rel.depth === 2) overviewCell.classList.add("rel-d2");
-    if (rel.depth === 3) overviewCell.classList.add("rel-d3");
+    for (const overviewCell of cells) {
+      if (overviewCell.classList.contains("empty")) continue;
+      if (rel.prereq) overviewCell.classList.add("rel-prereq");
+      if (rel.next) overviewCell.classList.add("rel-next");
+      if (rel.prereq && rel.next) overviewCell.classList.add("rel-both");
+      if (rel.depth === 2) overviewCell.classList.add("rel-d2");
+      if (rel.depth === 3) overviewCell.classList.add("rel-d3");
+    }
   }
 }
+
+// ---------- Mobile tools drawer ----------
 
 function isMobileToolsLayout() {
   return mobileToolsMql.matches;
@@ -157,12 +224,40 @@ function setMobileToolsOpen(open) {
   if (topbar) topbar.classList.toggle("tools-open", next);
   document.body.classList.toggle("mobile-tools-open", next);
   if (mobileToolsToggle) mobileToolsToggle.setAttribute("aria-expanded", String(next));
-  if (!next) setVendorPanelOpen(false);
   syncMobileToolsAccessibility();
 }
 
+// ---------- Side panel (overview + filters) ----------
+
+function readSidePref() {
+  try { return localStorage.getItem(SIDE_PREF_KEY); } catch (_) { return null; }
+}
+function writeSidePref(open) {
+  try { localStorage.setItem(SIDE_PREF_KEY, open ? "1" : "0"); } catch (_) {}
+}
+
+function isSideOpen() { return document.body.classList.contains("side-open"); }
+
+function setSideOpen(open, { remember = true } = {}) {
+  document.body.classList.toggle("side-open", !!open);
+  if (filtersToggle) filtersToggle.setAttribute("aria-pressed", String(!!open));
+  if (open && isMobileToolsLayout()) setMobileToolsOpen(false);
+  if (remember && dockedSideMql.matches) writeSidePref(!!open);
+  // Grid width changed → arrows / overlay need re-measuring after layout.
+  requestAnimationFrame(() => { redrawCurrentArrows(); updateSelectedOverlay(selectedOverlay, grid, state.ui.selectedId, state.byId); });
+  setTimeout(() => { redrawCurrentArrows(); updateSelectedOverlay(selectedOverlay, grid, state.ui.selectedId, state.byId); }, 220);
+}
+
+function initSidePanel() {
+  const pref = readSidePref();
+  const open = dockedSideMql.matches && pref !== "0";
+  setSideOpen(open, { remember: false });
+}
+
+// ---------- Overview jump ----------
+
 function updateOverviewCtaVisibility() {
-  const overview = grid.querySelector(".mobile-overview");
+  const overview = grid.querySelector(".overview-in-grid");
   if (!overview) {
     document.body.classList.remove("overview-in-view");
     return;
@@ -173,49 +268,41 @@ function updateOverviewCtaVisibility() {
   document.body.classList.toggle("overview-in-view", isVisible);
 }
 
-function jumpToOverviewCell(overviewCell) {
-  const target = grid.querySelector(
-    `.cell[data-tier="${CSS.escape(overviewCell.dataset.overviewTier)}"][data-domain="${CSS.escape(overviewCell.dataset.overviewDomain)}"]`
-  );
-  if (!target) return;
-  const stickyOffset = grid.querySelector(".tier-head")?.getBoundingClientRect().height || 0;
-  wrap.scrollTo({ top: Math.max(0, target.offsetTop - stickyOffset), left: 0, behavior: "smooth" });
+function flashCell(target) {
+  target.classList.remove("flash");
+  void target.offsetWidth;
+  target.classList.add("flash");
+  setTimeout(() => target.classList.remove("flash"), 1600);
 }
 
-function attachOverviewListeners() {
-  for (const cell of grid.querySelectorAll("[data-overview-tier][data-overview-domain]")) {
-    let downPoint = null;
-    let pointerHandled = false;
-    cell.addEventListener("pointerdown", e => {
-      downPoint = { x: e.clientX, y: e.clientY };
-      pointerHandled = false;
-    });
-    cell.addEventListener("pointerup", e => {
-      if (!downPoint) return;
-      const dx = Math.abs(e.clientX - downPoint.x);
-      const dy = Math.abs(e.clientY - downPoint.y);
-      downPoint = null;
-      if (dx > 8 || dy > 8) return;
-      pointerHandled = true;
-      e.preventDefault();
-      e.stopPropagation();
-      jumpToOverviewCell(cell);
-    });
-    cell.addEventListener("click", e => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (pointerHandled) {
-        pointerHandled = false;
-        return;
-      }
-      jumpToOverviewCell(cell);
-    });
+function jumpToOverviewCell(overviewCell) {
+  const tier = overviewCell.dataset.overviewTier;
+  const domain = overviewCell.dataset.overviewDomain;
+  if (state.ui.view === "list") {
+    // List view has no cells to scroll to: drill down instead.
+    setState({ domains: [domain], tiers: [tier] });
+    return;
   }
+  const target = grid.querySelector(
+    `.cell[data-tier="${CSS.escape(tier)}"][data-domain="${CSS.escape(domain)}"]`
+  );
+  if (!target) return;
+  const stickyOffset = (grid.querySelector(".domain-head")?.getBoundingClientRect().height || 0)
+    + (isMobileToolsLayout() ? (grid.querySelector(".tier-head")?.getBoundingClientRect().height || 0) : 0);
+  const stickyLeft = grid.querySelector(".tier-head")?.getBoundingClientRect().width || 0;
+  wrap.scrollTo({
+    top:  Math.max(0, target.offsetTop - stickyOffset - 6),
+    left: Math.max(0, target.offsetLeft - stickyLeft - 6),
+    behavior: "smooth",
+  });
+  flashCell(target);
+  if (!isMobileToolsLayout() && !dockedSideMql.matches) setSideOpen(false);
 }
 
 function scrollSelectedIntoView(certId, transitioning) {
-  const findEl = () =>
-    grid.querySelector(`.cert-card[data-cert-id="${CSS.escape(certId)}"]`);
+  const findEl = () => state.ui.view === "list"
+    ? listView.querySelector(`tr[data-cert-id="${CSS.escape(certId)}"]`)
+    : grid.querySelector(`.cert-card[data-cert-id="${CSS.escape(certId)}"]`);
 
   const doScroll = () => {
     const el = findEl();
@@ -260,21 +347,22 @@ async function bootstrap() {
     state.tiers   = data.tiers;
     state.certs   = data.certs;
     state.byId    = new Map(data.certs.map(c => [c.id, c]));
+    state.domainsById = new Map(data.domains.map(d => [d.id, d]));
+    state.tiersById   = new Map(data.tiers.map(tier => [tier.id, tier]));
     state.inverseMap = buildInverseMap(state.byId);
+    state.searchIndex = buildSearchIndex(data.certs, data.domains, data.tiers);
 
-    // vendorIndex returns [{slug, name, count}], already over the full set.
-    // Reuse it for both the filter panel and the prominent-vendor highlight.
     const vendors = vendorIndex(data.certs);
+    state.vendors = vendors;
     state.vendorCounts = new Map(vendors.map(v => [v.slug, v.count]));
     state.ui.vendorCounts = state.vendorCounts;
 
-    buildVendorPanel(vendorPanel, vendors);
+    buildFilterPanel(facetPanel, { domains: state.domains, tiers: state.tiers, vendors, lang: lang() });
 
     initThemeToggle(document.getElementById("theme-toggle"));
     attachFilterListeners({
       jpToggleBtn:   document.getElementById("jp-toggle-btn"),
       langToggleBtn: document.getElementById("lang-toggle-btn"),
-      vendorPanel,
       state: state.ui,
       onChange: rerender,
     });
@@ -302,12 +390,11 @@ if (topbarNav) {
 
 syncMobileToolsAccessibility();
 
-// Cert card click → just toggle selection (highlight + arrows).
-// The panel does NOT auto-open; user opens it via "Show details" CTA.
-// Switching certs preserves the user's current panel preference.
+// Cert card click → toggle selection (highlight + arrows). The panel does
+// NOT auto-open; user opens it via "Show details" CTA.
 document.addEventListener("click", e => {
   if (document.body.classList.contains("mobile-tools-open") &&
-      !e.target.closest("#topbar-nav, #mobile-tools-toggle, #vendor-panel")) {
+      !e.target.closest("#topbar-nav, #mobile-tools-toggle, #side-panel")) {
     setMobileToolsOpen(false);
     return;
   }
@@ -321,6 +408,16 @@ document.addEventListener("click", e => {
     return;
   }
 
+  const domainHead = e.target.closest(".domain-head[data-domain]");
+  if (domainHead) {
+    e.preventDefault();
+    const id = domainHead.dataset.domain;
+    const cur = state.ui.domains || [];
+    const only = cur.length === 1 && cur[0] === id;
+    setState({ domains: only ? null : [id] });
+    return;
+  }
+
   const overviewCell = e.target.closest("[data-overview-tier][data-overview-domain]");
   if (overviewCell) {
     e.preventDefault();
@@ -328,12 +425,11 @@ document.addEventListener("click", e => {
     return;
   }
 
-  // Click outside any card. Chrome (topbar / controls / about footer / vendor
-  // dropdown / detail panel) is excluded so PNG export, language toggle, JP
-  // toggle, theme switch, etc. NEVER clear the selection. Only a click on
-  // the matrix area itself (empty cell, tier label, etc.) deselects.
+  // Click outside any card. Chrome (topbar / controls / footer / side
+  // panel / detail panel / popovers) is excluded so toggles NEVER clear
+  // the selection. Only a click on the matrix area itself deselects.
   if (state.ui.selectedId &&
-      !e.target.closest("#detail-panel, .topbar, .controls, #about, #vendor-panel, .show-details-cta, .show-overview-cta, .mobile-overview")) {
+      !e.target.closest("#detail-panel, .topbar, .controls, #about, #side-panel, .side-backdrop, .show-details-cta, .show-overview-cta, .overview, #list-view, .cert-tooltip, #cert-context-menu")) {
     state.ui.panelDismissed = true;   // reset the panel preference
     setState({ cert: null });
   }
@@ -346,34 +442,34 @@ document.addEventListener("dismiss-panel", () => {
   rerender();
 });
 
-/** Re-apply `.search-match` classes on cards based on current query.
- *  Toggles `body.has-search` so CSS can dim non-matches. Recomputed
- *  in rerender() and on every keystroke (URL state subscriber). */
+// List view row pick → select + open details.
+document.addEventListener("list-pick", e => {
+  const id = e.detail?.id;
+  if (!id) return;
+  state.ui.panelDismissed = false;
+  if (state.ui.selectedId === id) rerender();
+  else setState({ cert: id });
+});
+
+/** Re-apply `.search-match` classes on cards based on current query. */
 function applySearchHighlight() {
-  const q = state.ui.searchQuery || "";
-  const matched = matchCertIds(state.certs, q);
-  document.body.classList.toggle("has-search", !!matched && matched.size > 0);
-  // Stamp matching cards. matched===null means no active search.
+  const matched = state.ui.searchMatches;
+  document.body.classList.toggle("has-search", !!matched);
   for (const card of grid.querySelectorAll(".cert-card")) {
-    const id = card.dataset.certId;
-    card.classList.toggle("search-match", !!matched && matched.has(id));
-  }
-  // Update the count badge to show match count when a search is active.
-  if (matched !== null) {
-    const total = state.certs.length;
-    counter.textContent = `${matched.size} match · ${total} certs`;
+    card.classList.toggle("search-match", !!matched && matched.has(card.dataset.certId));
   }
 }
 
-/** Helper passed to export functions so they can re-run drawArrows after
- *  forcing the matrix to its fixed export width. Captured here because
- *  export.js shouldn't import directly from app state. */
 function redrawCurrentArrows() {
+  if (state.ui.view === "list") {
+    drawArrows(arrowsSvg, grid, null, state.byId, state.inverseMap);
+    updateOverviewRelations();
+    return;
+  }
   drawArrows(arrowsSvg, grid, state.ui.selectedId, state.byId, state.inverseMap);
   updateOverviewRelations();
 }
 
-// Right-click context menu on cert cards: deselect / copy abbr / show details.
 attachContextMenu({
   getState: () => ({ byId: state.byId, ui: state.ui }),
   onAction: async (action, cert) => {
@@ -408,114 +504,165 @@ attachContextMenu({
   },
 });
 
-// ESC clears search first (if focused/active), then selection.
+attachCardTooltip(() => ({
+  byId: state.byId, lang: lang(), tiersById: state.tiersById, domainsById: state.domainsById,
+}));
+
+// ESC: close popovers → clear search → close drawers → deselect.
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape") return;
-  const searchInput = document.getElementById("search-input");
-  if (state.ui.searchQuery) {
-    if (searchInput) searchInput.value = "";
-    setState({ q: "" });
+  if (e.key === "Escape") {
+    const legend = document.getElementById("legend-popover");
+    if (legend && !legend.hidden) { setLegendOpen(false); return; }
+    const searchInput = document.getElementById("search-input");
+    if (state.ui.searchQuery) {
+      if (searchInput) searchInput.value = "";
+      setState({ q: "", qf: false });
+      return;
+    }
+    if (document.body.classList.contains("mobile-tools-open")) { setMobileToolsOpen(false); return; }
+    if (isSideOpen() && !dockedSideMql.matches) { setSideOpen(false); return; }
+    if (state.ui.selectedId) {
+      state.ui.panelDismissed = true;
+      setState({ cert: null });
+    }
     return;
   }
-  if (document.body.classList.contains("mobile-tools-open")) {
-    setMobileToolsOpen(false);
-    return;
-  }
-  if (state.ui.selectedId) {
-    state.ui.panelDismissed = true;
-    setState({ cert: null });
-  }
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")
+    || document.activeElement?.isContentEditable;
+  if (inField || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "f" || e.key === "F") { e.preventDefault(); setSideOpen(!isSideOpen()); }
 });
 
-// Header search input — debounced URL state update so the cache-busted
-// shareable URL is always in sync. Match highlight applies on every
-// keystroke immediately (no debounce) so feedback feels live.
+// ---------- Header search ----------
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");
-if (searchInput) {
+const searchResults = document.getElementById("search-results");
+if (searchInput && searchResults) {
   let debounce = 0;
-  searchInput.addEventListener("input", () => {
-    state.ui.searchQuery = searchInput.value;
-    applySearchHighlight();
-    clearTimeout(debounce);
-    debounce = setTimeout(() => setState({ q: searchInput.value }, { silent: true }), 200);
-  });
-  // Submitting a search (Enter) auto-selects the single match if any.
-  searchInput.addEventListener("keydown", e => {
-    if (e.key !== "Enter") return;
-    const matched = matchCertIds(state.certs, state.ui.searchQuery);
-    if (matched && matched.size === 1) {
-      const onlyId = matched.values().next().value;
-      setState({ cert: onlyId });
-    }
+  searchPalette = attachSearchPalette({
+    input: searchInput,
+    clearBtn: searchClear,
+    resultsEl: searchResults,
+    getCtx: () => ({
+      certs: state.certs, index: state.searchIndex, lang: lang(),
+      tiersById: state.tiersById, domainsById: state.domainsById,
+      searchFilter: state.ui.searchFilter,
+      visibleIds: new Set(applyFilters(state.certs, { ...state.ui, searchFilter: false }).map(c => c.id)),
+    }),
+    onQuery: q => {
+      state.ui.searchQuery = q;
+      clearTimeout(debounce);
+      if (state.ui.searchFilter) {
+        // Search doubles as a filter → the grid / list / counts all change.
+        rerender();
+      } else {
+        state.ui.searchMatches = matchCertIds(state.certs, state.searchIndex, q);
+        applySearchHighlight();
+        updateCounter(applyFilters(state.certs, state.ui));
+        renderSideOverview(applyFilters(state.certs, state.ui));
+        if (state.ui.view === "list") rerender();
+      }
+      debounce = setTimeout(() => setState({ q }, { silent: true }), 200);
+    },
+    onSelect: id => {
+      clearTimeout(debounce);
+      state.ui.panelDismissed = false;
+      const visibleNow = applyFilters(state.certs, state.ui).some(c => c.id === id);
+      const patch = { q: searchInput.value, cert: id };
+      if (!visibleNow) {
+        // The pick is hidden by facets: lift them so "take me there" works.
+        Object.assign(patch, { vendors: null, domains: null, tiers: null, xja: false, exp: null, cost: null, qf: false });
+      }
+      setState(patch);
+    },
+    onToggleFilter: () => setState({ q: searchInput.value, qf: !state.ui.searchFilter }),
   });
 }
 if (searchClear) {
   searchClear.addEventListener("click", () => {
     if (searchInput) searchInput.value = "";
-    setState({ q: "" });
+    setState({ q: "", qf: false });
     if (searchInput) searchInput.focus();
   });
 }
 
-// Vendor filter dropdown open/close
-function setVendorPanelOpen(open) {
-  const panel = document.getElementById("vendor-panel");
-  if (!panel) return;
-  panel.classList.toggle("open", open);
-  panel.setAttribute("aria-hidden", String(!open));
+// ---------- Filters toggle / side panel ----------
+if (filtersToggle) {
+  filtersToggle.addEventListener("click", () => setSideOpen(!isSideOpen()));
 }
+document.getElementById("side-close")?.addEventListener("click", () => setSideOpen(false));
+document.getElementById("side-backdrop")?.addEventListener("click", () => setSideOpen(false));
+dockedSideMql.addEventListener?.("change", () => initSidePanel());
 
-document.addEventListener("click", e => {
-  const toggle = e.target.closest("#vendor-filter-toggle");
-  const panel = document.getElementById("vendor-panel");
-  if (!panel) return;
-  if (toggle) {
-    setVendorPanelOpen(!panel.classList.contains("open"));
-    return;
-  }
-  if (panel.classList.contains("open") && !e.target.closest("#vendor-panel")) {
-    setVendorPanelOpen(false);
-  }
+// ---------- View switch ----------
+document.getElementById("view-matrix-btn")?.addEventListener("click", () => setState({ view: "matrix" }));
+document.getElementById("view-list-btn")?.addEventListener("click", () => setState({ view: "list" }));
+
+// ---------- Zoom ----------
+const ZOOMS = ["s", "m", "l"];
+function applyZoomAttr() {
+  const z = state.ui.zoom || "m";
+  if (z === "m") document.documentElement.removeAttribute("data-zoom");
+  else document.documentElement.setAttribute("data-zoom", z);
+  const i = ZOOMS.indexOf(z);
+  const out = document.getElementById("zoom-out");
+  const inn = document.getElementById("zoom-in");
+  if (out) out.disabled = i <= 0;
+  if (inn) inn.disabled = i >= ZOOMS.length - 1;
+}
+document.getElementById("zoom-control")?.addEventListener("click", e => {
+  const btn = e.target.closest(".zoom-btn");
+  if (!btn) return;
+  const i = ZOOMS.indexOf(state.ui.zoom || "m");
+  const next = ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + (btn.dataset.zoom === "in" ? 1 : -1)))];
+  setState({ z: next === "m" ? null : next });
 });
 
-// PNG export button
+// ---------- Legend popover ----------
+function setLegendOpen(open) {
+  const pop = document.getElementById("legend-popover");
+  const btn = document.getElementById("legend-toggle");
+  if (!pop) return;
+  pop.hidden = !open;
+  if (btn) btn.setAttribute("aria-expanded", String(open));
+}
+document.getElementById("legend-toggle")?.addEventListener("click", e => {
+  e.stopPropagation();
+  const pop = document.getElementById("legend-popover");
+  setLegendOpen(pop ? pop.hidden : false);
+});
+document.addEventListener("click", e => {
+  const pop = document.getElementById("legend-popover");
+  if (pop && !pop.hidden && !e.target.closest("#legend-popover, #legend-toggle")) setLegendOpen(false);
+});
+
+// ---------- PNG export ----------
 const pngBtn = document.getElementById("png-export-btn");
 if (pngBtn) {
   pngBtn.addEventListener("click", async () => {
-    const orig = pngBtn.textContent;
+    const orig = pngBtn.innerHTML;
     pngBtn.disabled = true;
     pngBtn.textContent = "…";
+    const wasList = state.ui.view === "list";
+    const wasSide = isSideOpen();
     try {
+      if (wasList) { state.ui.view = "matrix"; renderGrid(grid, state.domains, state.tiers, applyFilters(state.certs, state.ui), state.ui); applySearchHighlight(); listView.hidden = true; document.body.classList.remove("view-list"); }
+      if (wasSide) document.body.classList.remove("side-open");
       await exportMatrixPNG(redrawCurrentArrows);
     } catch (err) {
       console.error("PNG export failed:", err);
       alert("PNG export failed: " + err.message);
     } finally {
+      if (wasSide) document.body.classList.add("side-open");
+      if (wasList) { state.ui.view = "list"; }
       pngBtn.disabled = false;
-      pngBtn.textContent = orig;
+      pngBtn.innerHTML = orig;
+      rerender();
     }
   });
 }
 
-// Vendor-highlight threshold input. Debounced so URL doesn't churn while
-// the user is still typing. Empty / 0 / NaN clears the highlight (state
-// = null, URL drops the `vt` param).
-const vtInput = document.getElementById("vt-input");
-if (vtInput) {
-  let vtDebounce = 0;
-  vtInput.addEventListener("input", () => {
-    const raw = vtInput.value.trim();
-    const n = parseInt(raw, 10);
-    const next = (Number.isFinite(n) && n > 0) ? n : null;
-    clearTimeout(vtDebounce);
-    vtDebounce = setTimeout(() => setState({ vt: next }), 200);
-  });
-}
-
-// "Show details" floating CTA — surfaces when the panel is dismissed but
-// a cert is still selected. Lets the user re-open the detail panel without
-// having to re-click the same card.
+// ---------- Floating CTAs ----------
 const showDetailsBtn = document.getElementById("show-details-btn");
 if (showDetailsBtn) {
   showDetailsBtn.addEventListener("click", () => {
@@ -524,25 +671,21 @@ if (showDetailsBtn) {
     rerender();
   });
 }
-
 const showOverviewBtn = document.getElementById("show-overview-btn");
 if (showOverviewBtn) {
   showOverviewBtn.addEventListener("click", () => {
-    const overview = grid.querySelector(".mobile-overview");
+    const overview = grid.querySelector(".overview-in-grid");
     if (overview) overview.scrollIntoView({ block: "start", inline: "nearest", behavior: "smooth" });
   });
 }
 
 window.addEventListener("resize", () => {
-  if (!isMobileToolsLayout()) {
-    setMobileToolsOpen(false);
-  } else {
-    syncMobileToolsAccessibility();
-  }
+  if (!isMobileToolsLayout()) setMobileToolsOpen(false);
+  else syncMobileToolsAccessibility();
   updateOverviewCtaVisibility();
   if (state.ui.selectedId) {
     redrawCurrentArrows();
-    updateSelectedOverlay(selectedOverlay, grid, state.ui.selectedId, state.byId);
+    updateSelectedOverlay(selectedOverlay, grid, state.ui.view === "list" ? null : state.ui.selectedId, state.byId);
   } else {
     updateOverviewRelations();
   }
@@ -552,84 +695,88 @@ wrap.addEventListener("scroll", () => {
   requestAnimationFrame(updateOverviewCtaVisibility);
 });
 
-// Re-render on URL state changes from outside the widgets (back/forward,
-// pasted bookmark URL). We do NOT change panelDismissed on URL nav — the
-// panel is opt-in via the Show details CTA. Anyone receiving a shared
-// link sees the highlighted cert + arrows immediately and can choose to
-// open the detail panel.
+// ---------- URL state → UI ----------
 function syncFromUrl() {
-  const s = getState();
-  state.ui.showJp      = !!s.jp;
-  state.ui.labelLang   = s.lang === "ja" ? "ja" : "en";
-  state.ui.vendors     = s.vendors;
-  state.ui.selectedId  = s.cert || null;
-  state.ui.searchQuery = s.q || "";
-  state.ui.vendorThreshold = s.vt;
-  // Keep input field in sync (e.g., when state arrives from URL on load
-  // or back/forward).
+  syncUiFromUrl(state.ui, getState());
   const si = document.getElementById("search-input");
   if (si && si.value !== state.ui.searchQuery) si.value = state.ui.searchQuery;
-  const vi = document.getElementById("vt-input");
-  if (vi) {
-    const want = s.vt ? String(s.vt) : "";
-    if (vi.value !== want) vi.value = want;
-  }
+  applyZoomAttr();
   updateChromeLabels();
   rerender();
+  if (searchPalette) searchPalette.refresh();
 }
 subscribe(syncFromUrl);
-// subscribe() only fires on setState/popstate, so prime the state once on
-// load so URL params (?q=, ?vt=, ?cert=, etc.) take effect even before
-// any user interaction.
 syncFromUrl();
 
-/** Localize static chrome (legend, floating CTA, export buttons) on every
- *  language change. Detail panel content + cert cards localize themselves
- *  during their own renders. */
+/** Localize static chrome on every language change. */
 function updateChromeLabels() {
-  const lang = state.ui.labelLang;
+  const l = lang();
   const set = (id, key) => {
     const el = document.getElementById(id);
-    if (el) el.textContent = t(key, lang);
+    if (el) el.textContent = t(key, l);
   };
+  const title = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) { el.title = t(key, l); el.setAttribute("aria-label", t(key, l)); }
+  };
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n, l);
+
   set("lg-prereq", "legend_prereq");
   set("lg-next",   "legend_next");
   set("lg-depth",  "legend_depth");
   set("lg-hint",   "legend_hint");
+  set("lg-axes",   "legend_axes");
+  set("lg-jp",     "legend_jp_dot");
+  set("lg-avail",  "legend_avail");
+  set("legend-title", "legend_title");
+  set("legend-shortcuts-title", "legend_shortcuts");
+  set("lg-k-search",  "shortcut_search");
+  set("lg-k-filters", "shortcut_filters");
+  set("lg-k-arrows",  "shortcut_arrows");
+  set("lg-k-esc",     "shortcut_esc");
+  set("legend-btn-label", "legend");
+  set("side-title", "sidebar_title");
+  set("zoom-label", "zoom_label");
+  title("zoom-in",  "zoom_in");
+  title("zoom-out", "zoom_out");
+  title("side-close", "sidebar_close");
+  title("filters-toggle", "filters_tooltip");
+  title("view-matrix-btn", "view_matrix_tooltip");
+  title("view-list-btn", "view_list_tooltip");
+  title("jp-toggle-btn", "jp_toggle_tooltip");
+  title("lang-toggle-btn", "lang_toggle_tooltip");
+  title("theme-toggle", "theme_tooltip");
 
-  set("vt-label",  "vt_label");
-  set("vt-suffix", "vt_suffix");
-  const vtControl = document.getElementById("vt-control");
-  if (vtControl) vtControl.title = t("vt_tooltip", lang);
-  const vtInputEl = document.getElementById("vt-input");
-  if (vtInputEl) vtInputEl.setAttribute("aria-label", t("vt_tooltip", lang));
+  const si = document.getElementById("search-input");
+  if (si) { si.placeholder = t("search_placeholder", l); si.setAttribute("aria-label", t("search_aria", l)); }
+
+  const langLabel = document.querySelector(".lang-label");
+  if (langLabel) langLabel.textContent = l === "ja" ? "あ 日本語" : "A English";
 
   const png = document.getElementById("png-export-btn");
   if (png) {
-    png.textContent = t("png_btn_label", lang);
-    png.title       = t("export_png", lang);
+    png.innerHTML = `📷 <span class="btn-label">PNG</span>`;
+    png.title = t("export_png", l);
   }
   const showLabel = document.querySelector(".show-details-label");
-  if (showLabel) showLabel.textContent = t("show_details", lang);
+  if (showLabel) showLabel.textContent = t("show_details", l);
   const overviewBtn = document.getElementById("show-overview-btn");
   if (overviewBtn) {
-    overviewBtn.title = t("show_overview_tooltip", lang);
-    overviewBtn.setAttribute("aria-label", t("show_overview_tooltip", lang));
+    overviewBtn.title = t("show_overview_tooltip", l);
+    overviewBtn.setAttribute("aria-label", t("show_overview_tooltip", l));
   }
   const overviewLabel = document.querySelector(".show-overview-label");
-  if (overviewLabel) overviewLabel.textContent = t("show_overview", lang);
+  if (overviewLabel) overviewLabel.textContent = t("show_overview", l);
   const toolsToggle = document.getElementById("mobile-tools-toggle");
   if (toolsToggle) {
-    toolsToggle.title = t("tools_tooltip", lang);
-    toolsToggle.setAttribute("aria-label", t("tools_tooltip", lang));
+    toolsToggle.title = t("tools_tooltip", l);
+    toolsToggle.setAttribute("aria-label", t("tools_tooltip", l));
   }
   const toolsLabel = document.querySelector(".mobile-tools-label");
-  if (toolsLabel) toolsLabel.textContent = t("tools", lang);
+  if (toolsLabel) toolsLabel.textContent = t("tools", l);
+  document.documentElement.lang = l;
 }
 
-// Initial label paint (the subscribe() above also runs on page load,
-// but call here too in case there's a brief gap before the URL state
-// settles or to cover environments without the URL-state event).
 updateChromeLabels();
-
+initSidePanel();
 bootstrap();

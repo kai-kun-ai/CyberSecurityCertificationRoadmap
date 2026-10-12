@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cyber Security Certification Roadmap · by hinoshiba, built with Claude</title>
-  <meta name="description" content="An independently compiled, AI-evaluated security certification roadmap. Inspired by Paul Jerimy and CyberDudeKZ; data MIT-licensed." />
+  <meta name="description" content="An independently compiled, AI-evaluated security certification roadmap. Inspired by Paul Jerimy and CyberDudeKZ; data and code CC BY-SA 4.0." />
   <link rel="stylesheet" href="assets/css/styles.css" />
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
   <script>
@@ -18,6 +18,8 @@
         } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
           document.documentElement.setAttribute("data-theme", "light");
         }
+        var z = sp.get("z");
+        if (z === "s" || z === "m" || z === "l") document.documentElement.setAttribute("data-zoom", z);
       } catch (e) {}
     })();
   </script>
@@ -31,61 +33,103 @@
       <h1>Cyber Security Certification Roadmap <span class="byline">by <a href="https://x.com/hinoshiba" target="_blank" rel="noopener">hinoshiba</a>, built with <a href="https://www.anthropic.com/claude" target="_blank" rel="noopener">Claude</a></span></h1>
       <nav id="topbar-nav" class="topbar-nav" aria-label="Tools">
         <div class="search-wrap">
-          <input id="search-input" type="search" autocomplete="off" spellcheck="false"
-                 placeholder="Search abbr / name / vendor…" aria-label="Search certs" />
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="search-input" type="search" autocomplete="off" spellcheck="false" role="combobox"
+                 aria-autocomplete="list" aria-expanded="false" aria-controls="search-results" aria-haspopup="listbox"
+                 placeholder="Search abbr / name / vendor / domain…" aria-label="Search certs" />
+          <kbd class="search-kbd" aria-hidden="true">/</kbd>
           <button id="search-clear" type="button" class="search-clear" aria-label="Clear search" title="Clear (ESC)">×</button>
+          <div id="search-results" class="search-results" role="listbox" hidden></div>
         </div>
-        <button id="vendor-filter-toggle" type="button" class="icon-btn" title="Filter by vendor">
-          🏷 Vendor
+        <button id="filters-toggle" type="button" class="icon-btn" aria-pressed="false" aria-controls="side-panel" title="Filters (F)">
+          <span class="btn-icon">⚲</span> <span class="btn-label" data-i18n="filters">Filters</span><span id="filters-badge" class="badge" hidden></span>
         </button>
-        <button id="png-export-btn" type="button" class="icon-btn" title="Export matrix as PNG">
-          📷 PNG export
-        </button>
+        <div class="view-switch" role="group" aria-label="View">
+          <button id="view-matrix-btn" type="button" class="icon-btn seg" aria-pressed="true" title="Matrix view">
+            <span class="btn-icon">▦</span> <span class="btn-label" data-i18n="view_matrix">Matrix</span>
+          </button>
+          <button id="view-list-btn" type="button" class="icon-btn seg" aria-pressed="false" title="List view">
+            <span class="btn-icon">☰</span> <span class="btn-label" data-i18n="view_list">List</span>
+          </button>
+        </div>
         <button id="jp-toggle-btn" type="button" class="icon-btn" aria-pressed="false" title="Toggle Japan-only certs">
-          🇯🇵 JP
+          🇯🇵 <span class="btn-label">JP</span>
         </button>
         <button id="lang-toggle-btn" type="button" class="icon-btn" aria-pressed="false" title="Toggle Japanese labels">
-          あ Lang
+          <span class="lang-label"></span>
         </button>
         <button id="theme-toggle" type="button" class="icon-btn" aria-label="Toggle theme" title="Toggle dark/light">
           <span class="theme-label"></span>
         </button>
-        <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap/issues/new/choose" target="_blank" rel="noopener">Issue</a>
-        <a href="#about">About</a>
+        <button id="png-export-btn" type="button" class="icon-btn" title="Export matrix as PNG">
+          📷 <span class="btn-label">PNG</span>
+        </button>
+        <a class="nav-link" href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap" target="_blank" rel="noopener">GitHub</a>
+        <a class="nav-link" href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap/issues/new/choose" target="_blank" rel="noopener">Issue</a>
+        <a class="nav-link" href="#about">About</a>
       </nav>
     </div>
-    <!-- Vendor filter floating panel, anchored to the top-right toggle -->
-    <div id="vendor-panel" class="vendor-panel" aria-hidden="true"></div>
   </header>
 
   <section class="controls" aria-label="Status">
     <span class="meta" id="cert-count" aria-live="polite"></span>
-    <label class="vt-control" id="vt-control" title="">
-      <span class="vt-label" id="vt-label"></span>
-      <input id="vt-input" type="number" min="0" step="1" inputmode="numeric" placeholder="0" />
-      <span class="vt-suffix" id="vt-suffix"></span>
-    </label>
-    <span class="legend">
-      <span id="lg-prereq" class="lg-prereq"></span>
-      <span id="lg-next"   class="lg-next"></span>
-      <span id="lg-depth"  class="lg-depth"></span>
-      <span id="lg-hint"   class="lg-hint"></span>
-    </span>
+    <div id="active-filters" class="active-filters" aria-label="Active filters" hidden></div>
+    <div class="controls-right">
+      <div class="zoom-control" id="zoom-control" role="group">
+        <span class="zoom-label" id="zoom-label"></span>
+        <button type="button" class="zoom-btn" data-zoom="out" id="zoom-out" aria-label="Smaller cards">−</button>
+        <button type="button" class="zoom-btn" data-zoom="in" id="zoom-in" aria-label="Larger cards">+</button>
+      </div>
+      <button id="legend-toggle" type="button" class="icon-btn legend-btn" aria-expanded="false" aria-controls="legend-popover">
+        ? <span class="btn-label" id="legend-btn-label">Legend</span>
+      </button>
+    </div>
+    <div id="legend-popover" class="legend-popover" role="dialog" aria-label="Legend" hidden>
+      <div class="legend-title" id="legend-title"></div>
+      <ul class="legend-list">
+        <li id="lg-axes"></li>
+        <li><span class="lg-prereq" id="lg-prereq"></span></li>
+        <li><span class="lg-next" id="lg-next"></span></li>
+        <li class="muted" id="lg-depth"></li>
+        <li><span class="lg-dot" aria-hidden="true"></span> <span id="lg-jp"></span></li>
+        <li id="lg-avail"></li>
+        <li class="muted" id="lg-hint"></li>
+      </ul>
+      <div class="legend-title" id="legend-shortcuts-title"></div>
+      <ul class="legend-list legend-keys">
+        <li id="lg-k-search"></li>
+        <li id="lg-k-filters"></li>
+        <li id="lg-k-arrows"></li>
+        <li id="lg-k-esc"></li>
+      </ul>
+    </div>
   </section>
 
-  <main class="matrix-wrap" id="matrix-wrap" aria-busy="true">
-    <div class="grid-and-arrows">
-      <div id="grid" class="roadmap-grid">
-        <p class="loading">Loading roadmap…</p>
+  <div class="workspace" id="workspace">
+    <aside id="side-panel" class="side-panel" aria-label="Overview and filters">
+      <div class="side-head">
+        <span class="side-title" id="side-title"></span>
+        <button type="button" class="icon-btn side-close" id="side-close" aria-label="Close sidebar">×</button>
       </div>
-      <svg id="arrows-overlay" aria-hidden="true"></svg>
-      <!-- Floating "spotlight" for the selected cert. Sits above the arrow
-           overlay so the cert name stays readable even when many edges
-           converge on the same card. Positioned by JS to track the card. -->
-      <div id="selected-overlay" class="selected-overlay" aria-hidden="true"></div>
-    </div>
-  </main>
+      <section class="side-overview" id="side-overview"></section>
+      <section class="facet-panel" id="facet-panel"></section>
+    </aside>
+    <div class="side-backdrop" id="side-backdrop"></div>
+
+    <main class="matrix-wrap" id="matrix-wrap" aria-busy="true">
+      <div class="grid-and-arrows">
+        <div id="grid" class="roadmap-grid">
+          <p class="loading">Loading roadmap…</p>
+        </div>
+        <svg id="arrows-overlay" aria-hidden="true"></svg>
+        <!-- Floating "spotlight" for the selected cert. Sits above the arrow
+             overlay so the cert name stays readable even when many edges
+             converge on the same card. Positioned by JS to track the card. -->
+        <div id="selected-overlay" class="selected-overlay" aria-hidden="true"></div>
+      </div>
+      <div id="list-view" class="list-view" hidden></div>
+    </main>
+  </div>
 
   <aside id="detail-panel" class="detail-panel" aria-hidden="true"></aside>
 
@@ -108,6 +152,10 @@
     </span>
     <span class="about-sep">·</span>
     <span class="about-block">
+      <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap" target="_blank" rel="noopener">GitHub</a>
+      ·
+      <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap/issues/new/choose" target="_blank" rel="noopener">Issue</a>
+      ·
       <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap/blob/main/NOTICE" target="_blank" rel="noopener">NOTICE</a>
       ·
       <a href="https://github.com/hinoshiba/CyberSecurityCertificationRoadmap/blob/main/README.md" target="_blank" rel="noopener">README</a>
