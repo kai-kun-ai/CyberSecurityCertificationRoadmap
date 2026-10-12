@@ -34,15 +34,15 @@ UI code in `assets/`.
 
 | # | Observation | Evidence |
 | --- | --- | --- |
-| P1 | Search only highlighted cards in place; no result list. With "cloud" the user had to hunt 30 orange borders across 1400 px. | `desktop_search_cloud.png` |
+| P1 | Search only highlighted cards in place; no result list. With "cloud" the user had to hunt 30 orange borders across 1400 px. | [`screenshots/before-search.png`](./screenshots/before-search.png) |
 | P2 | Search matched only abbr / name / vendor. Typing a domain ("クラウド"), a tier ("expert") or a cert id found nothing. | `search.js` (old) |
 | P3 | No ranking: an exact abbreviation ("CCSP") and a substring hit ranked the same; Enter only worked when exactly one card matched. | `app.js` (old) |
 | P4 | Only filter was a vendor checklist in a dropdown; no domain, tier, language, cost or experience facets. | `filter.js` (old) |
-| P5 | The tier × domain heat map ("俯瞰図") existed only on phones. On desktop the only overview was the 317-card wall itself; at 1280 × 720 it needed scrolling and there was nothing to navigate by. | `laptop_1280.png` |
-| P6 | Cards show the abbreviation only; the full name lived in a slow native `title` tooltip. Long abbreviations were clipped ("ISA 62443..", "M_o_R Practiti..."). | `desktop_1440.png` |
-| P7 | Domain headers wrapped mid-word in Japanese and showed no counts; tier rows showed no counts. | `desktop_1440.png` |
+| P5 | The tier × domain heat map ("俯瞰図") existed only on phones. On desktop the only overview was the 317-card wall itself; at 1280 × 720 it needed scrolling and there was nothing to navigate by. | [`screenshots/before-laptop-1280.png`](./screenshots/before-laptop-1280.png) |
+| P6 | Cards show the abbreviation only; the full name lived in a slow native `title` tooltip. Long abbreviations were clipped ("ISA 62443..", "M_o_R Practiti..."). | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
+| P7 | Domain headers wrapped mid-word in Japanese and showed no counts; tier rows showed no counts. | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
 | P8 | No tabular view: nothing could be sorted by cost, experience, renewal or language. | — |
-| P9 | A cryptic "ベンダ強調: 資格数 [0] 件以上" number box sat in the main controls bar; the legend was a 200-character line. | `desktop_1440.png` |
+| P9 | A cryptic "ベンダ強調: 資格数 [0] 件以上" number box sat in the main controls bar; the legend was a 200-character line. | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
 | P10 | The `あ Lang` / `🇯🇵 JP` buttons were ambiguous (label language vs. Japan-only certs). | `index.html` (old) |
 
 ## What comparable roadmaps do
@@ -73,6 +73,15 @@ UI code in `assets/`.
 Out of scope for this round (candidates for later): saving a personal path,
 comparing two certs side by side, a "show secondary domains too" switch for the
 domain facet, and per-domain colour themes for the matrix columns.
+
+## Screenshots (after)
+
+| | |
+| --- | --- |
+| ![Desktop default](./screenshots/after-desktop.png) | ![Search palette](./screenshots/after-search.png) |
+| ![Overview + filters side panel](./screenshots/after-sidebar.png) | ![Facets applied](./screenshots/after-filters.png) |
+| ![Single-domain focus](./screenshots/after-domain-focus.png) | ![Sortable list view](./screenshots/after-list.png) |
+| ![Hover tooltip](./screenshots/after-tooltip.png) | ![Dark / English](./screenshots/after-dark-en.png) |
 
 ---
 
@@ -108,15 +117,15 @@ domain facet, and per-domain colour themes for the matrix columns.
 
 | # | 観察 | 根拠 |
 | --- | --- | --- |
-| P1 | 検索は該当カードを光らせるだけで結果一覧がない。「cloud」で 30 件のオレンジ枠を 1400px の中から探す必要があった。 | `desktop_search_cloud.png` |
+| P1 | 検索は該当カードを光らせるだけで結果一覧がない。「cloud」で 30 件のオレンジ枠を 1400px の中から探す必要があった。 | [`screenshots/before-search.png`](./screenshots/before-search.png) |
 | P2 | 検索対象は略称 / 名称 / ベンダのみ。ドメイン (「クラウド」)、段階 (「expert」)、ID は検索不可。 | 旧 `search.js` |
 | P3 | 関連度順がなく、略称完全一致と部分一致が同列。Enter は一致が 1 件の時だけ動作。 | 旧 `app.js` |
 | P4 | フィルタはドロップダウンのベンダ一覧のみ。ドメイン・段階・言語・費用・経験年数の絞り込みがない。 | 旧 `filter.js` |
-| P5 | 俯瞰図 (段階 × ドメインのヒートマップ) はスマホ専用。デスクトップでは 317 枚のカードの壁そのものが唯一の俯瞰で、1280×720 ではスクロールが必要なのに道しるべがない。 | `laptop_1280.png` |
-| P6 | カードは略称のみ。正式名称は表示の遅いネイティブ `title` 頼み。長い略称は途中で切れる ("ISA 62443..", "M_o_R Practiti...")。 | `desktop_1440.png` |
-| P7 | ドメイン見出しが日本語で単語の途中で折り返し、件数もない。段階行にも件数がない。 | `desktop_1440.png` |
+| P5 | 俯瞰図 (段階 × ドメインのヒートマップ) はスマホ専用。デスクトップでは 317 枚のカードの壁そのものが唯一の俯瞰で、1280×720 ではスクロールが必要なのに道しるべがない。 | [`screenshots/before-laptop-1280.png`](./screenshots/before-laptop-1280.png) |
+| P6 | カードは略称のみ。正式名称は表示の遅いネイティブ `title` 頼み。長い略称は途中で切れる ("ISA 62443..", "M_o_R Practiti...")。 | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
+| P7 | ドメイン見出しが日本語で単語の途中で折り返し、件数もない。段階行にも件数がない。 | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
 | P8 | 表形式がなく、費用・経験年数・更新・言語で並べ替えできない。 | — |
-| P9 | 意味の分かりにくい「ベンダ強調: 資格数 [0] 件以上」の数値入力がメインのバーに常駐し、凡例が 200 文字の一行。 | `desktop_1440.png` |
+| P9 | 意味の分かりにくい「ベンダ強調: 資格数 [0] 件以上」の数値入力がメインのバーに常駐し、凡例が 200 文字の一行。 | [`screenshots/before-desktop.png`](./screenshots/before-desktop.png) |
 | P10 | `あ Lang` / `🇯🇵 JP` ボタンが紛らわしい (表示言語か、日本限定資格の表示か)。 | 旧 `index.html` |
 
 ## 参考ロードマップの流儀
@@ -145,3 +154,7 @@ domain facet, and per-domain colour themes for the matrix columns.
 
 今回の対象外 (次の候補): 自分の取得計画の保存、2 資格の並列比較、ドメイン
 ファセットで副ドメインも含めるスイッチ、列ごとのドメイン配色テーマ。
+
+## スクリーンショット (改善後)
+
+上の英語セクション末尾の表を参照 (`docs/screenshots/after-*.png`)。改善前は `before-*.png`。
