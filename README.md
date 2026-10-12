@@ -94,6 +94,42 @@ block is filled by the skill, not by you.
 
 ---
 
+## Using the roadmap
+
+The site is a static page; everything below is URL state, so any view you
+build is a bookmarkable, shareable link.
+
+- **Search** (`/` or `Ctrl+K`): ranked type-ahead over abbreviation, name
+  (EN / JA), vendor, domain and tier labels. `↑ ↓` to move, `Enter` to open
+  a cert, `Esc` to close. "Hide non-matches" turns the search into a filter.
+- **Filters** (`F`): domain, tier, "offered in Japanese", Japan-only certs,
+  required experience, exam cost, vendor. Every value shows how many certs
+  it would leave; active filters appear as removable chips above the matrix.
+- **Overview**: the tier × domain heat map in the side panel mirrors the
+  current filters / search; click a cell to jump to it. Click a column
+  header to focus a single domain (cards then show vendor + full name).
+- **Views**: `Matrix` (the roadmap) or `List` (sortable table: cost,
+  languages, experience, renewal …). Both share filters and the detail panel.
+- **Card size** `− / +`, hover tooltips, `?` legend with keyboard shortcuts,
+  PNG export of the current matrix.
+
+| Param | Meaning | Example |
+| --- | --- | --- |
+| `q`, `qf=1` | search query; `qf` hides non-matches | `?q=cloud&qf=1` |
+| `d`, `t` | domain / tier ids (comma-separated) | `?d=cloud-security,iam&t=associate` |
+| `v` | vendor slugs | `?v=isc2,giac` |
+| `xja=1`, `jp=1` | exam offered in Japanese / show Japan-only certs | `?xja=1&jp=1` |
+| `exp`, `cost` | experience bands `0,1-2,3-5,6+`; cost bands `lt300,300-600,600-1000,gte1000,unknown` | `?exp=0,1-2&cost=lt300` |
+| `view`, `sort` | `matrix` (default) or `list`; `sort=<col>:<asc|desc>` | `?view=list&sort=cost:desc` |
+| `z` | card size `s` / `m` / `l` | `?z=l` |
+| `cert` | selected cert id (draws the prerequisite path) | `?cert=isc2.cissp` |
+| `lang`, `theme`, `vt` | label language, theme, vendor-highlight threshold | `?lang=ja&theme=light` |
+
+The research behind this UI (personas, observed pain points, requirements)
+is in [`docs/ux-research.md`](./docs/ux-research.md).
+
+---
+
 ## Running locally
 
 Everything runs through Docker. The container mounts your `~/.claude*` and
@@ -122,6 +158,7 @@ data/
   certs/<vendor>/<cert>.json
 schema/certification.schema.json
 assets/                  # static HTML / CSS / JS for GitHub Pages
+docs/                    # UX research notes behind the UI
 .claude/skills/          # AI skills: add-cert, evaluate, etc.
 .github/                 # Issue templates, PR template, Pages workflow
 docker/                  # Dockerfile + entrypoint
